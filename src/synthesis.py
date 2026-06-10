@@ -1,6 +1,15 @@
+import dataclasses
+from dataclasses import dataclass
 from random import Random
 
 from common import ALPHABET
+
+
+@dataclass(frozen=True)
+class DatasetCollection:
+    datasetA: list[str]
+    datasetB: list[str]
+    datasetC: list[str]
 
 
 def _mutate_pattern(
@@ -47,7 +56,7 @@ def _synthesize_sequence(patterns: list[str], rng: Random) -> str:
 def build_datasets(
     patterns: list[str],
     seed: int | None = None,
-) -> tuple[list[str], list[str], list[str]]:
+) -> DatasetCollection:
     """
     Build a small set of datasets containing partially random sequences
     """
@@ -56,8 +65,8 @@ def build_datasets(
     sequences = [_synthesize_sequence(patterns, rng) for _ in range(200)]
     rng.shuffle(sequences)
 
-    datasetA = sequences[:20]
-    datasetB = sequences[20:160]
-    datasetC = sequences[160:]
-
-    return datasetA, datasetB, datasetC
+    return DatasetCollection(
+        datasetA=sequences[:20],
+        datasetB=sequences[20:160],
+        datasetC=sequences[160:],
+    )
