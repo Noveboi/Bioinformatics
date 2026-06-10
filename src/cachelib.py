@@ -1,5 +1,8 @@
 import json
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 class Cache:
@@ -26,8 +29,10 @@ class Cache:
         """
         filepath = self._filepath(key)
 
-        with open(filepath, "w", encoding="utf-8") as f:
+        with open(filepath, "w") as f:
             json.dump(value, f, indent=2)
+
+        log.info("Saved '%s' to '%s'", key, filepath)
 
         return filepath
 
@@ -37,5 +42,9 @@ class Cache:
         """
         filepath = self._filepath(key)
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(filepath, "r") as f:
+            obj = json.load(f)
+
+        log.info("Loaded '%s' from '%s'", key, filepath)
+
+        return obj

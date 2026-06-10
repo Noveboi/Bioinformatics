@@ -1,15 +1,17 @@
 import dataclasses
-from dataclasses import dataclass
 from random import Random
 
 from common import ALPHABET
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class DatasetCollection:
     datasetA: list[str]
     datasetB: list[str]
     datasetC: list[str]
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
 
 
 def _mutate_pattern(
@@ -39,6 +41,7 @@ def _mutate_pattern(
             chars[pos] = rng.choice(ALPHABET)
         else:
             del chars[pos]
+            n_chars -= 1
 
     return "".join(chars)
 
