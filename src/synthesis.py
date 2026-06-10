@@ -3,7 +3,7 @@ from random import Random
 from common import ALPHABET
 
 
-def mutate_pattern(
+def _mutate_pattern(
     pattern: str,
     rng: Random,
     max_changes: int = 2,
@@ -34,10 +34,10 @@ def mutate_pattern(
     return "".join(chars)
 
 
-def generate_sequence(patterns: list[str], rng: Random) -> str:
+def _synthesize_sequence(patterns: list[str], rng: Random) -> str:
     prefix = "".join(rng.choice(ALPHABET) for _ in range(rng.randint(1, 3)))
 
-    body_parts = [mutate_pattern(pattern, rng) for pattern in patterns]
+    body_parts = [_mutate_pattern(pattern, rng) for pattern in patterns]
 
     suffix = "".join(rng.choice(ALPHABET) for _ in range(rng.randint(1, 3)))
 
@@ -53,7 +53,7 @@ def build_datasets(
     """
     rng = Random(seed)
 
-    sequences = [generate_sequence(patterns, rng) for _ in range(200)]
+    sequences = [_synthesize_sequence(patterns, rng) for _ in range(200)]
     rng.shuffle(sequences)
 
     datasetA = sequences[:20]
