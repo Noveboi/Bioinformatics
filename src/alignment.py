@@ -23,20 +23,20 @@ class AlignmentResult:
     aligned_seq1: str
     aligned_seq2: str
     score: float
-    score_matrix: list[list[float]]
-    moves: list[Move]
+    score_matrix: list[list[float]] | None
+    moves: list[Move] | None
 
 
 class DistanceMatrix:
-    def __init__(self, data: dict[tuple[int, int], float]):
+    def __init__(self, data: dict[tuple[int, int], AlignmentResult]):
         self._data = data
-        self._n = len(data)
+        self.n = len(data)
 
-    def score(self, i: int, j: int) -> float:
-        max_idx = self._n - 1
+    def get(self, i: int, j: int) -> AlignmentResult:
+        max_idx = self.n - 1
 
         if i > max_idx or j > max_idx:
-            raise IndexError(f"Index i or j are out of bounds for size {self._n}")
+            raise IndexError(f"Index i or j are out of bounds for size {self.n}")
 
         if i == j:
             return 0.0  # self-alignment is ignored
@@ -47,7 +47,7 @@ class DistanceMatrix:
         return self._data[i, j]
 
 
-def align(seq1: str, seq2: str, alpha: int) -> AlignmentResult:
+def align(seq1: str, seq2: str, alpha: int, no_store: bool = True) -> AlignmentResult:
     """
     Perform global sequence alignment using the Needleman-Wunsch algorithm.
 
@@ -60,6 +60,9 @@ def align(seq1: str, seq2: str, alpha: int) -> AlignmentResult:
     alpha : int
         Parameter that defines the penalties for gaps and mismatches.
         The higher the value, the more harsh the penalty is.
+    no_store : bool, optional
+        Flag to tell the algorithm to not store additional information such as
+        the score matrix and move list. Setting this flag to ``True`` saves memory.
     """
     m = len(seq1)
     n = len(seq2)
@@ -119,7 +122,9 @@ def align(seq1: str, seq2: str, alpha: int) -> AlignmentResult:
     # Alignment Process
     while i > 0 or j > 0:
         move = trace[i][j]
-        moves.append(move)
+
+        if not no_store:
+            moves.append(move)
 
         if move == Move.DIAGONAL:  # (i-1, j-1) ancestor
             aligned1.append(seq1[i - 1])
@@ -140,20 +145,16 @@ def align(seq1: str, seq2: str, alpha: int) -> AlignmentResult:
         else:
             raise RuntimeError("Impossible branch hit.")
 
-    aligned1.reverse()
-    aligned2.reverse()
-    moves.reverse()
-
     return AlignmentResult(
-        aligned_seq1="".join(aligned1),
-        aligned_seq2="".join(aligned2),
+        aligned_seq1="".join(aligned1[::-1]),
+        aligned_seq2="".join(aligned2[::-1]),
         score=dp[m][n],
-        score_matrix=dp,
-        moves=moves,
+        score_matrix=None if no_store else dp,
+        moves=None if no_store else moves[::-1],
     )
 
 
-def _distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
+def _build_distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
     """
     Contains all pairwise global alignment scores for all the pairs of given sequences.
 
@@ -171,7 +172,7 @@ def _distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
     """
 
     n = len(sequences)
-    scores: dict[tuple[int, int], float] = {}
+    scores: dict[tuple[int, int], AlignmentResult] = {}
 
     for i in range(n):
         # Triangular indexing to take only the upper triangular part of the matrix
@@ -179,15 +180,34 @@ def _distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
             a = sequences[i]
             b = sequences[j]
 
-            result = align(a, b, alpha=alpha)
-
-            scores[(i, j)] = result.score
+            scores[(i, j)] = align(a, b, alpha=alpha, no_store=True)
 
     return DistanceMatrix(scores)
 
 
-def multiple_align(sequences: list[str], alpha: int):
-    pass
+def _best_alignment(distances: DistanceMatrix) -> tuple[str, str]:
+    best_score = -1e10
+    best_idx = (-1, -1)
+
+    for i in range(distances.n):
+        for j in range(i + 1, distances.n):
+            alignment = distances.get(i, j)
+            score = alignment.score
+            if score > best_score:
+                best_score = score
+                best_idx = (i, j)
+
+    return best_idx
+
+
+def multiple_align(sequences: list[str], alpha: int) -> list[str]:
+    distances = _build_distance_matrix(sequences, alpha)
+    seqA, seqB = _best_alignment(distances)
+
+    msa: list[str] = [seqA, seqB]
+
+    while len(msa) < len(sequences):
+        pass
 
 
 # Small demo program to play with the algorithms
