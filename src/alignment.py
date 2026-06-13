@@ -162,12 +162,10 @@ def _distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
     then the matrix is of the following form:
 
       |    A    |    B    |    C    |
+    --|---------|---------|---------|
     A |    -    | g(A, B) | g(A, C) |
-    --|-----------------------------|
     B | g(B, A) |    -    | g(B, C) |
-    --|-----------------------------|
     C | g(C, A) | g(C, B) |    -    |
-    --|-----------------------------|
 
     Because by definition g(S1, S2) = g(S2, S1), the matrix is symmetric and we can save storage space.
     """
@@ -192,7 +190,7 @@ def multiple_align(sequences: list[str], alpha: int):
     pass
 
 
-# Small demo program to play with the algorithm
+# Small demo program to play with the algorithms
 if __name__ == "__main__":
     import argparse
 
