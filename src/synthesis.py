@@ -47,6 +47,29 @@ def _mutate_pattern(
 
 
 def _synthesize_sequence(patterns: list[str], rng: Random) -> str:
+    """
+    Generates a sequence partially random sequence in a 3-step process:
+
+    Step #1: Prefix
+        A random short sequence is used as the start of the whole sequence
+
+    Step #2: Pattern Mutation
+        Using the given ``patterns``, the algorithm will append each pattern to the body of the whole sequence.
+        Before appending, each pattern is mutated randomly at randomly varying degrees.
+
+    Step #3: Suffix
+        A random short sequence is used as the end of the whole sequence. Same process as the prefix.
+
+    Parameters
+    --------
+    patterns : list of str
+        Base sequences of A,T,G,C to use for constructing/synthesizing the sequence.
+        The resulting sequence will be very similar to the given patterns but will differ at some points
+        due to the prefix, suffix and mutations that occur.
+
+    rng: Random
+        Random number generator for creating the prefix, suffix and defining the mutations.
+    """
     prefix = "".join(rng.choice(ALPHABET) for _ in range(rng.randint(1, 3)))
 
     body_parts = [_mutate_pattern(pattern, rng) for pattern in patterns]
@@ -61,7 +84,7 @@ def build_datasets(
     seed: int | None = None,
 ) -> DatasetCollection:
     """
-    Build a small set of datasets containing partially random sequences
+    Build a small set of datasets containing sequences derived from the given ``patterns``
     """
     rng = Random(seed)
 
