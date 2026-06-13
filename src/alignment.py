@@ -38,7 +38,13 @@ class DistanceMatrix:
         if i > max_idx or j > max_idx:
             raise IndexError(f"Index i or j are out of bounds for size {self._n}")
 
-        return self._data[(min(i, j), max(i, j))]
+        if i == j:
+            return 0.0  # self-alignment is ignored
+
+        if i > j:
+            i, j = j, i
+
+        return self._data[i, j]
 
 
 def align(seq1: str, seq2: str, alpha: int) -> AlignmentResult:
