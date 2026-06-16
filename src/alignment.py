@@ -6,6 +6,7 @@ Contains all alignment algorithms, including:
 """
 
 import dataclasses
+from collections import Counter
 from enum import Enum
 
 GAP = "-"
@@ -39,7 +40,7 @@ class DistanceMatrix:
             raise IndexError(f"Index i or j are out of bounds for size {self.n}")
 
         if i == j:
-            return 0.0  # self-alignment is ignored
+            raise ValueError("Self-alignment is not supported.")
 
         if i > j:
             i, j = j, i
@@ -185,9 +186,9 @@ def _build_distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
     return DistanceMatrix(scores)
 
 
-def _best_alignment(distances: DistanceMatrix) -> tuple[str, str]:
+def _best_alignment_pair(distances: DistanceMatrix) -> tuple[int, int, AlignmentResult]:
     best_score = -1e10
-    best_idx = (-1, -1)
+    best = None
 
     for i in range(distances.n):
         for j in range(i + 1, distances.n):
@@ -195,19 +196,123 @@ def _best_alignment(distances: DistanceMatrix) -> tuple[str, str]:
             score = alignment.score
             if score > best_score:
                 best_score = score
-                best_idx = (i, j)
+                best = (i, j, alignment)
+
+    if best is None:
+        raise RuntimeError("Empty distance matrix provided")
+
+    return best
+
+
+def _build_consensus(sequences: list[str]) -> str:
+    """
+    Construct a 'consensus' sequence from two or more sequences. The consensus sequence essentially reflects
+    the most common symbols for each position of the sequences.
+
+    Example
+    --------
+
+    n | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+    --|---|---|---|---|---|---|----
+    A | A | G | T | C | C | A | A |
+    B | A | - | T | G | C | - | A |
+    C | G | - | A | C | G | A | C |
+    X | A | G | T | C | C | A | A |
+
+    In the table above, the consensus sequence is X = AGTCCAA, reflecting the most frequent symbols for each position/column.
+    IMPORTANT: Note there are no gaps in the consensus, this is intentional.
+    """
+    if len(sequences) < 2:
+        raise ValueError("A consensus can be determined for two or more sequences.")
+
+    if len(set(len(x) for x in sequences)) > 1:
+        raise ValueError("All sequences should have the same length!")
+
+    symbols: list[str] = []
+
+    for col in range(len(sequences[0])):
+        column = [x[col] for x in sequences if x[col] != GAP]
+        most_common_symbol = Counter(column).most_common(1)[0][0]
+        symbols.append(most_common_symbol)
+
+    return "".join(symbols)
+
+
+def _pick_next_index(
+    remaining: set[int],
+    included: set[int],
+    distances: DistanceMatrix,
+) -> int:
+    """
+    Greedy nearest-neighbour strategy for advancing the MSA. This is nice and simple.
+    """
+    best_score = -1e10
+    best_idx = -1
+
+    for k in remaining:
+        for m in included:
+            score = distances.get(k, m).score
+            if score > best_score:
+                best_score = score
+                best_idx = k
 
     return best_idx
 
 
+def _add_gaps(sequences: list[str], aligned_consensus: str) -> list[str]:
+    """
+    Insert/propagate gaps from the aligned consensus into the list of MSA sequences.
+
+    Motivation
+    --------
+    Pairwise aligning two sequences could result in them having a bigger length.
+    This means that the newly aligned sequences will have a length mismatch with the older
+    ones. This is absolutely not allowed, MSA strictly produces same-length sequences.
+
+    """
+    new_sequences: list[str] = []
+
+    for seq in sequences:
+        symbols: list[str] = []
+        old_col = 0
+
+        for x in aligned_consensus:
+            if x == GAP:
+                symbols.append(GAP)
+            else:
+                symbols.append(seq[old_col])
+                old_col += 1
+
+        new_sequences.append("".join(symbols))
+
+    return new_sequences
+
+
 def multiple_align(sequences: list[str], alpha: int) -> list[str]:
+    """
+    Align the list of given ``sequences``.
+    """
     distances = _build_distance_matrix(sequences, alpha)
-    seqA, seqB = _best_alignment(distances)
 
-    msa: list[str] = [seqA, seqB]
+    i, j, first = _best_alignment_pair(distances)
+    msa: dict[int, str] = {i: first.aligned_seq1, j: first.aligned_seq2}
+    remaining = set(range(len(sequences))) - {i, j}
 
-    while len(msa) < len(sequences):
-        pass
+    while len(remaining) > 0:
+        included = set(msa.keys())
+        msa_sequences = list(msa.values())
+
+        next_idx = _pick_next_index(remaining, included, distances)
+        consensus = _build_consensus(msa_sequences)
+        result = align(consensus, sequences[next_idx], alpha=alpha)
+        updated = _add_gaps(msa_sequences, result.aligned_seq1)
+
+        msa = dict(zip(included, updated))
+        msa[next_idx] = result.aligned_seq2
+
+        remaining.remove(next_idx)
+
+    return [msa[i] for i in range(len(msa))]
 
 
 # Small demo program to play with the algorithms
@@ -215,20 +320,41 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("seq1", type=str)
-    parser.add_argument("seq2", type=str)
-    parser.add_argument("id", type=int)
+    subparsers = parser.add_subparsers(dest="command")
+
+    pairwise_parser = subparsers.add_parser("pairwise-align")
+
+    pairwise_parser.add_argument("seq1", type=str)
+    pairwise_parser.add_argument("seq2", type=str)
+    pairwise_parser.add_argument("id", type=int)
+
+    multi_parser = subparsers.add_parser("multi-align")
+
+    multi_parser.add_argument("seqs", nargs="+", type=str)
+    multi_parser.add_argument("--id", type=int, required=True)
 
     args = parser.parse_args()
 
     alpha = 2 - args.id % 2
 
-    print(f"α = {alpha}")
-    print(f"A = {args.seq1}")
-    print(f"B = {args.seq2}")
+    if args.command == "pairwise-align":
+        print(f"α = {alpha}")
+        print(f"A = {args.seq1}")
+        print(f"B = {args.seq2}")
 
-    result = align(args.seq1, args.seq2, alpha)
+        result = align(args.seq1, args.seq2, alpha)
 
-    print("\nAlignment\n--------")
-    print(result.aligned_seq1)
-    print(result.aligned_seq2)
+        print("\nAlignment\n--------")
+        print(result.aligned_seq1)
+        print(result.aligned_seq2)
+
+    if args.command == "multi-align":
+        print(f"α = {alpha}")
+        for i, s in enumerate(args.seqs):
+            print(f"s{i} = {s}")
+
+        result = multiple_align(args.seqs, alpha=alpha)
+
+        print("\nAlignment\n--------")
+        for s in result:
+            print(s)
