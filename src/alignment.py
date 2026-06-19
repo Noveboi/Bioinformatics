@@ -9,7 +9,7 @@ import dataclasses
 from collections import Counter
 from enum import Enum
 
-GAP = "-"
+from common import GAP
 
 
 class Move(Enum):
