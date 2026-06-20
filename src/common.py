@@ -15,7 +15,7 @@ class ProbabilityDistribution:
     def __init__(self, distribution: dict[str, float]):
         prob_sum = sum(distribution.values())
 
-        if prob_sum != 1:
+        if abs(prob_sum - 1) > 1e-9:
             raise ValueError(
                 f"Probability distribution {distribution} has sum {prob_sum}"
             )

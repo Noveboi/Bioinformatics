@@ -1,4 +1,4 @@
-from common import GAP
+from common import ALPHABET, GAP, ProbabilityDistribution, smooth_counts
 
 
 def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
@@ -25,7 +25,6 @@ class ProfileHMM:
         Construct the HMM profile from an MSA (Multi-Sequence Alignment) result.
         """
         THRESHOLD: float = 0.5
-        n_cols = len(msa[0])
 
         match_columns = _get_match_columns(msa, threshold=THRESHOLD)
         L = len(match_columns)
@@ -36,24 +35,20 @@ class ProfileHMM:
                 f"No match columns detected from MSA. (threshold={THRESHOLD}"
             )
 
-        column_labels: list[tuple[str, int]] = []
-        match_count: int = 0
+        counts: list[dict[str, float]] = [{} for _ in range(L)]
+        emit_match: list[ProbabilityDistribution] = [
+            ProbabilityDistribution.uniform(ALPHABET) for _ in range(L)
+        ]
 
-        # Label every MSA column:
-        # - ('M', k)
-        # - ('I', k)
-        # - ('D', -1)
-        # where the 2-tuple is (<symbol>, <index>)
-        for j in range(n_cols):
-            if j in match_columns:
-                label = ("M", match_count)
-                match_count += 1
-            elif 0 < match_count < L:
-                label = ("I", match_count - 1)
-            else:
-                label = ("SKIP", -1)
+        for sequence in msa:
+            for i, col in enumerate(match_columns):
+                symbol = sequence[col]
+                if symbol != GAP:
+                    counts[i][symbol] = counts[i].get(symbol, 0) + 1
 
-            column_labels.append(label)
+        for i in range(L):
+            normalized = smooth_counts({c: counts[i].get(c, 0.0) for c in ALPHABET})
+            emit_match[i] = ProbabilityDistribution(normalized)
 
-        # Create the graph
-        pass
+        self.emit_match = emit_match
+        self.match_column_count = L
