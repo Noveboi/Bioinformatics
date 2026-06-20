@@ -6,10 +6,13 @@ Contains all alignment algorithms, including:
 """
 
 import dataclasses
+from argparse import BooleanOptionalAction
 from collections import Counter
 from enum import Enum
+from pathlib import Path
 
 from common import GAP
+from synthesis import DatasetCollection
 
 
 class Move(Enum):
@@ -29,9 +32,9 @@ class AlignmentResult:
 
 
 class DistanceMatrix:
-    def __init__(self, data: dict[tuple[int, int], AlignmentResult]):
+    def __init__(self, n_seq: int, data: dict[tuple[int, int], AlignmentResult]):
         self._data = data
-        self.n = len(data)
+        self.n = n_seq
 
     def get(self, i: int, j: int) -> AlignmentResult:
         max_idx = self.n - 1
@@ -171,7 +174,6 @@ def _build_distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
 
     Because by definition g(S1, S2) = g(S2, S1), the matrix is symmetric and we can save storage space.
     """
-
     n = len(sequences)
     scores: dict[tuple[int, int], AlignmentResult] = {}
 
@@ -183,7 +185,7 @@ def _build_distance_matrix(sequences: list[str], alpha: int) -> DistanceMatrix:
 
             scores[(i, j)] = align(a, b, alpha=alpha, no_store=True)
 
-    return DistanceMatrix(scores)
+    return DistanceMatrix(n, scores)
 
 
 def _best_alignment_pair(distances: DistanceMatrix) -> tuple[int, int, AlignmentResult]:
@@ -300,7 +302,7 @@ def multiple_align(sequences: list[str], alpha: int) -> list[str]:
 
     while len(remaining) > 0:
         included = set(msa.keys())
-        msa_sequences = list(msa.values())
+        msa_sequences = [msa[k] for k in list(msa.keys())]
 
         next_idx = _pick_next_index(remaining, included, distances)
         consensus = _build_consensus(msa_sequences)
@@ -319,6 +321,8 @@ def multiple_align(sequences: list[str], alpha: int) -> list[str]:
 if __name__ == "__main__":
     import argparse
 
+    from cachelib import Cache
+
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
 
@@ -330,7 +334,8 @@ if __name__ == "__main__":
 
     multi_parser = subparsers.add_parser("multi-align")
 
-    multi_parser.add_argument("seqs", nargs="+", type=str)
+    multi_parser.add_argument("seqs", nargs="*", type=str)
+    multi_parser.add_argument("--load", action=BooleanOptionalAction)
     multi_parser.add_argument("--id", type=int, required=True)
 
     args = parser.parse_args()
@@ -350,10 +355,20 @@ if __name__ == "__main__":
 
     if args.command == "multi-align":
         print(f"α = {alpha}")
-        for i, s in enumerate(args.seqs):
+
+        x = vars(args)
+
+        if x.get("load", False):
+            seqs = DatasetCollection(**Cache("_cache").load("datasets")).datasetA
+        elif x.get("seqs"):
+            seqs = x["seqs"]
+        else:
+            raise ValueError("No sequences given to align.")
+
+        for i, s in enumerate(seqs):
             print(f"s{i} = {s}")
 
-        result = multiple_align(args.seqs, alpha=alpha)
+        result = multiple_align(seqs, alpha=alpha)
 
         print("\nAlignment\n--------")
         for s in result:
