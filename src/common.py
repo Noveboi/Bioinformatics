@@ -22,6 +22,12 @@ class ProbabilityDistribution:
 
         self.probabilities = distribution
 
+    def __str__(self) -> str:
+        return self.probabilities.__str__()
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
     @classmethod
     def uniform(cls, symbols: list[str] | tuple[str, ...]) -> "ProbabilityDistribution":
         p = 1 / len(symbols)
