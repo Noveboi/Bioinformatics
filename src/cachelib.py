@@ -14,10 +14,14 @@ class Cache:
 
     def __init__(self, cache_path: str) -> None:
         self.dir = Path(cache_path)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        self._checked = False
 
     def _filepath(self, key: str) -> Path:
         return self.dir / f"{key}.json"
+
+    def _ensure_dir_exists(self):
+        if not self._checked:
+            self.dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, key: str, value: dict) -> Path:
         """
@@ -27,6 +31,8 @@ class Cache:
         --------
         The path of the saved file.
         """
+        self._ensure_dir_exists()
+
         filepath = self._filepath(key)
 
         with open(filepath, "w") as f:
