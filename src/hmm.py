@@ -189,3 +189,21 @@ class ProfileHMM:
 
         path.reverse()
         return score, path
+
+
+if __name__ == "__main__":
+    from alignment import multiple_align
+    from cachelib import Cache
+    from synthesis import DatasetCollection
+
+    cache = Cache("_cache")
+    datasets = DatasetCollection(**cache.load("datasets"))
+
+    msa = multiple_align(datasets.datasetB, alpha=1)
+    profile = ProfileHMM(msa)
+
+    print(f"Length: {len(msa[0])}")
+    print(f"Matches: {profile.match_column_count}")
+
+    for emission in profile.emit_match:
+        print(f"Emission: {emission}")
