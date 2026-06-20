@@ -9,7 +9,6 @@ import dataclasses
 from argparse import BooleanOptionalAction
 from collections import Counter
 from enum import Enum
-from pathlib import Path
 
 from common import GAP
 from synthesis import DatasetCollection

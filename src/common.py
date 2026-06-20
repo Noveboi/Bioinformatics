@@ -15,7 +15,7 @@ class ProbabilityDistribution:
     def __init__(self, distribution: dict[str, float]):
         prob_sum = sum(distribution.values())
 
-        if abs(prob_sum - 1) > 1e-9:
+        if abs(prob_sum - 1) > 1e-3:
             raise ValueError(
                 f"Probability distribution {distribution} has sum {prob_sum}"
             )
@@ -27,6 +27,11 @@ class ProbabilityDistribution:
 
     def __repr__(self) -> str:
         return self.__str__()
+
+    def display(self, decimal_places: int = 3) -> str:
+        return {
+            k: round(v, decimal_places) for k, v in self.probabilities.items()
+        }.__str__()
 
     @classmethod
     def uniform(cls, symbols: list[str] | tuple[str, ...]) -> "ProbabilityDistribution":
