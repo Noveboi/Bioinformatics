@@ -37,8 +37,8 @@ class Node(Enum):
 @dataclass(frozen=True)
 class ViterbiNode:
     type: Node
-    profile_col: int
-    sequence_pos: int
+    profile_column: int
+    sequence_position: int
 
 
 def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
@@ -218,7 +218,7 @@ class ProfileHMM:
         path: list[ViterbiNode] = []
 
         while node_type != Node.BEGIN:
-            path.append(ViterbiNode(node_type, profile_col=i, sequence_pos=j))
+            path.append(ViterbiNode(node_type, profile_column=i, sequence_position=j))
 
             if node_type == Node.MATCH:
                 trace = trace_m[i][j]
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         print(f"Score: {score}")
         print(f"Path: {len(path)}")
         for node in path:
-            print(f"{node.type.name} ({node.profile_col}, {node.sequence_pos})")
+            print(f"{node.type.name} ({node.profile_column}, {node.sequence_position})")
 
     v(seq)
     v(seq2)
