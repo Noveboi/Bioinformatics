@@ -96,7 +96,7 @@ class ProfileHMM:
         self.insert_emission_probs = ProbabilityDistribution.uniform(ALPHABET)
         self.match_column_count = L
 
-    def _emite_match_log_prob(self, i: int, symbol: str) -> float:
+    def _emit_match_log_prob(self, i: int, symbol: str) -> float:
         prob = self.match_emission_probs[i].probabilities.get(symbol, TINY)
         return safe_log(prob)
 
@@ -169,7 +169,7 @@ class ProfileHMM:
 
                     if len(candidates) > 0:
                         best_score, prev_node_type = max(candidates, key=lambda x: x[0])
-                        nv = best_score + self._emite_match_log_prob(
+                        nv = best_score + self._emit_match_log_prob(
                             i - 1, sequence[j - 1]
                         )
 
