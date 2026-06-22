@@ -46,6 +46,19 @@ class TransitionProbabilities:
             DELETE: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
         }
 
+    @classmethod
+    def from_counts(
+        cls,
+        counts: dict[State, dict[State, int]],
+    ) -> "TransitionProbabilities":
+        probs = {
+            s: ProbabilityDistribution.from_counts(c, True) for s, c in counts.items()
+        }
+
+        t = cls()
+        t._probs = probs
+        return t
+
     def get(self, previous_state: State, current_state: State):
         return self._probs[previous_state].get(current_state)
 
@@ -104,7 +117,7 @@ class ProfileHMM:
         match_counts: list[dict[str, int]] = [
             {c: 0 for c in ALPHABET} for _ in range(L)
         ]
-        insert_counts: dict[str, int] = {c: 0 for c in ALPHABET}
+        insert_counts: dict[str, int] = {x: 0 for x in ALPHABET}
 
         for sequence in msa:
             for j, col in enumerate(match_columns):
@@ -266,6 +279,50 @@ class ProfileHMM:
         path.reverse()
         return score, path
 
+    def train(self, sequences: list[str]) -> None:
+        """
+        Train the profile HMM using the best-path method.
+        """
+        L = self.match_column_count
+
+        transition_counts = {
+            s1: {s2: 0 for s2 in [MATCH, INSERT, DELETE]}
+            for s1 in [BEGIN, MATCH, INSERT, DELETE]
+        }
+
+        match_counts = [{x: 0 for x in ALPHABET} for _ in range(L)]
+
+        insert_counts = {x: 0 for x in ALPHABET}
+
+        for sequence in sequences:
+            _, best_path = self.viterbi(sequence)
+
+            prev_state = BEGIN
+            j = 0
+
+            for node in best_path:
+                curr_state = node.state
+
+                transition_counts[prev_state][curr_state] += 1
+
+                if curr_state == MATCH:
+                    match_counts[node.profile_column - 1][sequence[j]] += 1
+                    j += 1
+
+                elif curr_state == INSERT:
+                    insert_counts[sequence[j]] += 1
+                    j += 1
+
+                prev_state = curr_state
+
+        self.transition_probs = TransitionProbabilities.from_counts(transition_counts)
+        self.match_emit_probs = [
+            ProbabilityDistribution.from_counts(c, True) for c in match_counts
+        ]
+        self.insert_emit_probs = ProbabilityDistribution.from_counts(
+            insert_counts, True
+        )
+
 
 if __name__ == "__main__":
     from alignment import multiple_align
@@ -281,9 +338,9 @@ if __name__ == "__main__":
     print(f"Symbols: {len(msa[0])}")
     print(f"Matches: {profile.match_column_count}\n{'-' * 40}")
 
-    # print("\nEmission Probability Distributions per Match")
-    # for i, emission in enumerate(profile.match_emit_probs):
-    #     print(f"{i + 1}: {emission.display()}")
+    print("\nEmission Probability Distributions per Match")
+    for i, emission in enumerate(profile.match_emit_probs):
+        print(f"{i + 1}: {emission.display()}")
 
     seq = datasets.datasetC[2]
     seq2 = seq[:15] + "A" + seq[15:]
