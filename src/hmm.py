@@ -1,4 +1,3 @@
-import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -7,26 +6,12 @@ from common import (
     GAP,
     INFINITY,
     ProbabilityDistribution,
-    safe_log,
-    smooth_counts,
 )
 
-TINY = 1e-10
 NEGATIVE_INFINITY = -INFINITY
 
-# Fixed transition probabilities
-P_MM, P_MI, P_MD = 0.8, 0.1, 0.1  # from MATCH to X
-P_IM, P_II, P_ID = 0.1, 0.8, 0.1  # from INSERT to X
-P_DM, P_DI, P_DD = 0.8, 0.1, 0.1  # from DELETE to X
-P_BM, P_BI, P_BD = 0.8, 0.1, 0.1  # from B to X
 
-LOG_MM, LOG_MI, LOG_MD = math.log(P_MM), math.log(P_MI), math.log(P_MD)
-LOG_IM, LOG_II, LOG_ID = math.log(P_IM), math.log(P_II), math.log(P_ID)
-LOG_DM, LOG_DI, LOG_DD = math.log(P_DM), math.log(P_DI), math.log(P_DD)
-LOG_BM, LOG_BI, LOG_BD = math.log(P_BM), math.log(P_BI), math.log(P_BD)
-
-
-class Node(Enum):
+class State(Enum):
     NONE = -1
     BEGIN = 0
     MATCH = 1
@@ -34,11 +19,38 @@ class Node(Enum):
     DELETE = 3
 
 
+# shorthand syntax for more compact code
+# the ``State`` class is kept for strong type inference
+BEGIN = State.BEGIN
+MATCH = State.MATCH
+INSERT = State.INSERT
+DELETE = State.DELETE
+
+
 @dataclass(frozen=True)
 class ViterbiNode:
-    type: Node
+    state: State
     profile_column: int
     sequence_position: int
+
+
+class TransitionProbabilities:
+    def __init__(self):
+        # HMM Transition probability distribution modelled as P(S_n = x | S_{n-1} = y).
+        # A nested dictionary is used for encapsulating each conditioned probability space Ω in a ``ProbabilityDistribution``,
+        # thus enforcing the probability theory invariants.
+        self._probs = {
+            BEGIN: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
+            MATCH: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
+            INSERT: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
+            DELETE: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
+        }
+
+    def get(self, previous_state: State, current_state: State):
+        return self._probs[previous_state].get(current_state)
+
+    def log(self, previous_state: State, current_state: State):
+        return self._probs[previous_state].log(current_state)
 
 
 def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
@@ -60,55 +72,69 @@ def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
 
 
 class ProfileHMM:
+    """
+    A specific type of hidden Markov model (HMM) with three states:
+        - INSERT (I)
+        - MATCH (M)
+        - DELETE (D)
+
+    The purpose of the profile HMM is to emit sequences (A, T, G, C) by first predicting the
+    overall structure of a given set of related sequences
+
+    Sources
+    --------
+        1. https://www.ebi.ac.uk/training/online/courses/pfam-creating-protein-families/what-are-profile-hidden-markov-models-hmms/
+    """
+
     def __init__(self, msa: list[str]):
         """
         Construct the HMM profile from an MSA (Multi-Sequence Alignment) result.
-
-        Sources
-        --------
-        https://www.ebi.ac.uk/training/online/courses/pfam-creating-protein-families/what-are-profile-hidden-markov-models-hmms/
         """
         THRESHOLD: float = 0.5
 
         match_columns = _get_match_columns(msa, threshold=THRESHOLD)
+        match_columns_set = set(match_columns)
         L = len(match_columns)
 
-        # ! if you hit this, lower the threshold little-by-ltitle
-        if L == 0:
+        if L == 0:  # ! if you hit this, lower the threshold
             raise ValueError(
                 f"No match columns detected from MSA. (threshold={THRESHOLD}"
             )
 
-        counts: list[dict[str, float]] = [{} for _ in range(L)]
-        emit_match = [ProbabilityDistribution.uniform(ALPHABET) for _ in range(L)]
+        match_counts: list[dict[str, int]] = [
+            {c: 0 for c in ALPHABET} for _ in range(L)
+        ]
+        insert_counts: dict[str, int] = {c: 0 for c in ALPHABET}
 
         for sequence in msa:
-            for i, col in enumerate(match_columns):
+            for j, col in enumerate(match_columns):
                 symbol = sequence[col]
+
                 if symbol != GAP:
-                    counts[i][symbol] = counts[i].get(symbol, 0) + 1
+                    match_counts[j][symbol] += 1
 
-        for i in range(L):
-            normalized = smooth_counts({c: counts[i].get(c, 0.0) for c in ALPHABET})
-            emit_match[i] = ProbabilityDistribution(normalized)
+        for sequence in msa:
+            for col in range(len(sequence)):
+                symbol = sequence[col]
+                if col not in match_columns_set and symbol != GAP:
+                    insert_counts[symbol] += 1
 
-        self.match_emission_probs = emit_match
-        self.insert_emission_probs = ProbabilityDistribution.uniform(ALPHABET)
         self.match_column_count = L
+        self.transition_probs = TransitionProbabilities()
 
-    def _emit_match_log_prob(self, i: int, symbol: str) -> float:
-        prob = self.match_emission_probs[i].probabilities.get(symbol, TINY)
-        return safe_log(prob)
-
-    def _emit_insert_log_prob(self, symbol: str) -> float:
-        prob = self.insert_emission_probs.probabilities.get(symbol, TINY)
-        return safe_log(prob)
+        self.match_emit_probs = [
+            ProbabilityDistribution.from_counts(c, True) for c in match_counts
+        ]
+        self.insert_emit_probs = ProbabilityDistribution.from_counts(
+            insert_counts, True
+        )
 
     def viterbi(self, sequence: str) -> tuple[float, list[ViterbiNode]]:
         """
         Finds the most likely state path for a sequence
         """
         L, n = self.match_column_count, len(sequence)
+        tp = self.transition_probs.log
 
         # Dynamic programming matrcies
         # 1. dp_m[i][j] : best score ending in MATCH at profile column i after emitting j symbols
@@ -119,94 +145,97 @@ class ProfileHMM:
         dp_d = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
 
         # Traceback matrices -- these will define the best path
-        trace_m = [[(Node.NONE, -1)] * (n + 1) for _ in range(L + 1)]
-        trace_i = [[(Node.NONE, -1)] * (n + 1) for _ in range(L + 1)]
-        trace_d = [[(Node.NONE, -1)] * (n + 1) for _ in range(L + 1)]
-
-        # Initial Condition / Seed
-        trace_m[1][1] = (Node.BEGIN, 0)
-        trace_i[0][1] = (Node.BEGIN, 0)
-        trace_d[1][0] = (Node.BEGIN, 0)
+        trace_m = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
+        trace_i = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
+        trace_d = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
 
         # Main DP loop
         for i in range(L + 1):
             for j in range(n + 1):
                 # INSERT[i][j] -- emits sequence[j-1], j does not increment
                 if j > 0:
-                    candidates: list[tuple[float, Node]] = []
+                    candidates: list[tuple[float, State]] = []
 
-                    if i == 0 and j == 1:
-                        candidates.append((LOG_BI, Node.BEGIN))
+                    if i == 0 and j == 1:  # INSERT Initial Condition
+                        candidates.append((tp(BEGIN, INSERT), BEGIN))
 
                     if dp_m[i][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[i][j - 1] + LOG_MI, Node.MATCH))
+                        candidates.append((dp_m[i][j - 1] + tp(MATCH, INSERT), MATCH))
                     if dp_i[i][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_i[i][j - 1] + LOG_II, Node.INSERT))
+                        candidates.append((dp_i[i][j - 1] + tp(INSERT, INSERT), INSERT))
                     if dp_d[i][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_d[i][j - 1] + LOG_DI, Node.DELETE))
+                        candidates.append((dp_d[i][j - 1] + tp(DELETE, INSERT), DELETE))
 
                     if len(candidates) > 0:
-                        best_score, prev_node_type = max(candidates, key=lambda x: x[0])
-                        nv = best_score + self._emit_insert_log_prob(sequence[j - 1])
+                        score, prev_state = max(candidates, key=lambda x: x[0])
+                        best_emission_score = score + self.insert_emit_probs.log(
+                            sequence[j - 1]
+                        )
 
-                        if nv > dp_i[i][j]:
-                            dp_i[i][j] = nv
-                            trace_i[i][j] = (prev_node_type, i)
+                        if best_emission_score > dp_i[i][j]:
+                            dp_i[i][j] = best_emission_score
+                            trace_i[i][j] = (prev_state, i)
 
                 # MATCH[i][j] -- emits sequence[j-1], j increments
                 if i > 0 and j > 0:
-                    candidates: list[tuple[float, Node]] = []
+                    candidates: list[tuple[float, State]] = []
 
-                    if i == 1 and j == 1:
-                        candidates.append((LOG_BM, Node.BEGIN))
+                    if i == 1 and j == 1:  # MATCH Initial Condition
+                        candidates.append((tp(BEGIN, MATCH), BEGIN))
 
                     if dp_m[i - 1][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[i - 1][j - 1] + LOG_MM, Node.MATCH))
+                        candidates.append(
+                            (dp_m[i - 1][j - 1] + tp(MATCH, MATCH), MATCH)
+                        )
                     if dp_i[i - 1][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_i[i - 1][j - 1] + LOG_IM, Node.INSERT))
+                        candidates.append(
+                            (dp_i[i - 1][j - 1] + tp(INSERT, MATCH), INSERT)
+                        )
                     if dp_d[i - 1][j - 1] > NEGATIVE_INFINITY:
-                        candidates.append((dp_d[i - 1][j - 1] + LOG_DM, Node.DELETE))
-
-                    if len(candidates) > 0:
-                        best_score, prev_node_type = max(candidates, key=lambda x: x[0])
-                        nv = best_score + self._emit_match_log_prob(
-                            i - 1, sequence[j - 1]
+                        candidates.append(
+                            (dp_d[i - 1][j - 1] + tp(DELETE, MATCH), DELETE)
                         )
 
-                        if nv > dp_m[i][j]:
-                            dp_m[i][j] = nv
-                            trace_m[i][j] = (prev_node_type, i - 1)
+                    if len(candidates) > 0:
+                        score, prev_state = max(candidates, key=lambda x: x[0])
+                        best_emission_score = score + self.match_emit_probs[i - 1].log(
+                            sequence[j - 1]
+                        )
+
+                        if best_emission_score > dp_m[i][j]:
+                            dp_m[i][j] = best_emission_score
+                            trace_m[i][j] = (prev_state, i - 1)
 
                 # DELETE[i, j] -- do not emit, j does not incremenet
                 if i > 0:
-                    candidates: list[tuple[float, Node]] = []
+                    candidates: list[tuple[float, State]] = []
 
-                    if i == 1 and j == 0:
-                        candidates.append((LOG_BD, Node.BEGIN))
+                    if i == 1 and j == 0:  # DELETE Initial Condition
+                        candidates.append((tp(BEGIN, DELETE), BEGIN))
 
                     if dp_m[i - 1][j] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[i - 1][j] + LOG_MD, Node.MATCH))
+                        candidates.append((dp_m[i - 1][j] + tp(MATCH, DELETE), MATCH))
                     if dp_i[i - 1][j] > NEGATIVE_INFINITY:
-                        candidates.append((dp_i[i - 1][j] + LOG_ID, Node.INSERT))
+                        candidates.append((dp_i[i - 1][j] + tp(INSERT, DELETE), INSERT))
                     if dp_d[i - 1][j] > NEGATIVE_INFINITY:
-                        candidates.append((dp_d[i - 1][j] + LOG_DD, Node.DELETE))
+                        candidates.append((dp_d[i - 1][j] + tp(DELETE, DELETE), DELETE))
 
                     if len(candidates) > 0:
-                        best_score, prev_node_type = max(candidates, key=lambda x: x[0])
+                        score, prev_state = max(candidates, key=lambda x: x[0])
 
-                        if best_score > dp_d[i][j]:
-                            dp_d[i][j] = best_score
-                            trace_d[i][j] = (prev_node_type, i - 1)
+                        if score > dp_d[i][j]:
+                            dp_d[i][j] = score
+                            trace_d[i][j] = (prev_state, i - 1)
 
         # Determine the best final state after processing all `n` symbols
-        final_candidates: list[tuple[float, Node]] = []
+        final_candidates: list[tuple[float, State]] = []
 
         if dp_m[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_m[L][n], Node.MATCH))
+            final_candidates.append((dp_m[L][n], MATCH))
         if dp_i[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_i[L][n], Node.INSERT))
+            final_candidates.append((dp_i[L][n], INSERT))
         if dp_d[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_d[L][n], Node.DELETE))
+            final_candidates.append((dp_d[L][n], DELETE))
 
         if len(final_candidates) == 0:
             return NEGATIVE_INFINITY, []
@@ -217,16 +246,16 @@ class ProfileHMM:
         # Construct the path from end to beginning
         path: list[ViterbiNode] = []
 
-        while node_type != Node.BEGIN:
+        while node_type != BEGIN:
             path.append(ViterbiNode(node_type, profile_column=i, sequence_position=j))
 
-            if node_type == Node.MATCH:
+            if node_type == MATCH:
                 trace = trace_m[i][j]
                 j -= 1
-            elif node_type == Node.INSERT:
+            elif node_type == INSERT:
                 trace = trace_i[i][j]
                 j -= 1
-            elif node_type == Node.DELETE:
+            elif node_type == DELETE:
                 trace = trace_d[i][j]
                 # j unchanged
             else:
@@ -252,9 +281,9 @@ if __name__ == "__main__":
     print(f"Symbols: {len(msa[0])}")
     print(f"Matches: {profile.match_column_count}\n{'-' * 40}")
 
-    print("\nEmission Probability Distributions per Match")
-    for i, emission in enumerate(profile.match_emission_probs):
-        print(f"{i + 1}: {emission.display()}")
+    # print("\nEmission Probability Distributions per Match")
+    # for i, emission in enumerate(profile.match_emit_probs):
+    #     print(f"{i + 1}: {emission.display()}")
 
     seq = datasets.datasetC[2]
     seq2 = seq[:15] + "A" + seq[15:]
@@ -266,7 +295,9 @@ if __name__ == "__main__":
         print(f"Score: {score}")
         print(f"Path: {len(path)}")
         for node in path:
-            print(f"{node.type.name} ({node.profile_column}, {node.sequence_position})")
+            print(
+                f"{node.state.name} ({node.profile_column}, {node.sequence_position})"
+            )
 
     v(seq)
     v(seq2)

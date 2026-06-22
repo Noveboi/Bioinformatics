@@ -1,18 +1,27 @@
 import math
+from typing import Sequence
 
 ALPHABET = ("A", "C", "G", "T")
 GAP = "-"
 INFINITY = 1e30
 
 
-class ProbabilityDistribution:
+def _safe_log(p: float) -> float:
     """
-    Encapsulates a dictionary with symbols as keys and probabilities as values.
+    Compute the logarithm of a number safely. Returns negative infinity for
+    zero or near-zero numbers.
+    """
+    return math.log(p) if p > 1e-300 else -INFINITY
+
+
+class ProbabilityDistribution[T]:
+    """
+    Encapsulates a dictionary with symbols (of type T) as keys and probabilities as values.
 
     Enforces the invariant that all the probabilities in the distribution must sum to 1.
     """
 
-    def __init__(self, distribution: dict[str, float]):
+    def __init__(self, distribution: dict[T, float]):
         prob_sum = sum(distribution.values())
 
         if abs(prob_sum - 1) > 1e-3:
@@ -34,37 +43,64 @@ class ProbabilityDistribution:
         }.__str__()
 
     @classmethod
-    def uniform(cls, symbols: list[str] | tuple[str, ...]) -> "ProbabilityDistribution":
+    def from_counts[TSymbol](
+        cls,
+        counts: dict[TSymbol, int],
+        smooth: bool,
+    ) -> "ProbabilityDistribution[TSymbol]":
+        """
+        Construct a probability distribution from a dictionary of symbol counts.
+
+        Parameters
+        --------
+        counts : dict[TSymbol, int]
+            The count dictionary with the keys containing the symbols and the values
+            containing the corresponding counts.
+        smooth : bool, optional
+            Whether to perform additive/laplace smoothing on the ``counts`` before calculating
+            the probabilities.
+
+        Sources
+        --------
+        1. Additive Smoothing - https://en.wikipedia.org/wiki/Additive_smoothing
+        """
+        total = sum(counts.values())
+        d = len(counts)
+
+        pseudocount = 1 if smooth else 0
+
+        probalities: dict[TSymbol, float] = {
+            symbol: (count + pseudocount) / (total + pseudocount * d)
+            for symbol, count in counts.items()
+        }
+
+        return ProbabilityDistribution(probalities)
+
+    @classmethod
+    def uniform[TSymbol](
+        cls,
+        symbols: Sequence[TSymbol],
+    ) -> "ProbabilityDistribution[TSymbol]":
+        """
+        Construct a uniform probability distribution for a set of symbols.
+
+        Examples
+        --------
+        ```
+        symbols = ['A', 'B', 'C', 'D']
+        probs = ProbabilityDistribution.uniform(symbols)
+        probs.display() # { 'A': 0.25, 'B': 0.25, 'C': 0.25, 'D': 0.25 }
+        ```
+        """
         p = 1 / len(symbols)
 
         return ProbabilityDistribution({x: p for x in symbols})
 
-    def copy(self) -> "ProbabilityDistribution":
+    def get(self, symbol: T) -> float:
+        return self.probabilities[symbol]
+
+    def log(self, symbol: T) -> float:
+        return _safe_log(self.get(symbol))
+
+    def copy(self) -> "ProbabilityDistribution[T]":
         return ProbabilityDistribution(self.probabilities.copy())
-
-
-def safe_log(p: float) -> float:
-    """
-    Compute the logarithm of a number safely. Returns negative infinity for
-    zero or near-zero numbers.
-    """
-    return math.log(p) if p > 1e-300 else -INFINITY
-
-
-def smooth_counts(counts: dict[str, float]) -> dict[str, float]:
-    """
-    Perform additive smoothing on the count dictionary.
-
-    This prevents any one event/symbol having zero probability and is useful
-    for making all events at least a tiny bit likely rather than completely unlikely.
-
-    Sources
-    --------
-    https://en.wikipedia.org/wiki/Additive_smoothing
-    """
-    PSEUDOCOUNT: float = 1.0  # The smoothing parameter
-    d = len(counts)
-
-    total = sum(counts.values()) + PSEUDOCOUNT * d  # denominator: N + αd
-
-    return {k: (v + PSEUDOCOUNT) / total for k, v in counts.items()}
