@@ -79,6 +79,18 @@ def _synthesize_sequence(patterns: list[str], rng: Random) -> str:
     return prefix + "".join(body_parts) + suffix
 
 
+def generate_random_sequences(reference_dataset: list[str], seed: int) -> list[str]:
+    rng = Random(seed)
+
+    mean_length = round(
+        sum(len(seq) for seq in reference_dataset) / len(reference_dataset)
+    )
+
+    return [
+        "".join(rng.choice(ALPHABET) for _ in range(mean_length)) for _ in range(40)
+    ]
+
+
 def build_datasets(
     patterns: list[str],
     seed: int | None = None,
