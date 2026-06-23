@@ -1,8 +1,10 @@
 import math
+from collections.abc import Sequence
 
 ALPHABET = ("A", "C", "G", "T")
 GAP = "-"
 INFINITY = 1e30
+NEGATIVE_INFINITY = -INFINITY
 
 
 def _safe_log(p: float) -> float:

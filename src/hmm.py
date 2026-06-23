@@ -4,11 +4,9 @@ from enum import Enum
 from common import (
     ALPHABET,
     GAP,
-    INFINITY,
+    NEGATIVE_INFINITY,
     ProbabilityDistribution,
 )
-
-NEGATIVE_INFINITY = -INFINITY
 
 
 class State(Enum):
@@ -39,7 +37,7 @@ class TransitionProbabilities:
         # HMM Transition probability distribution modelled as P(S_n = x | S_{n-1} = y).
         # A nested dictionary is used for encapsulating each conditioned probability space Ω in a ``ProbabilityDistribution``,
         # thus enforcing the probability theory invariants.
-        self._probs = {
+        self._probs: dict[State, ProbabilityDistribution[State]] = {
             BEGIN: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
             MATCH: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
             INSERT: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
@@ -332,15 +330,18 @@ if __name__ == "__main__":
     cache = Cache("_cache")
     datasets = DatasetCollection(**cache.load("datasets"))
 
-    msa = multiple_align(datasets.datasetB, alpha=1)
+    msa = multiple_align(datasets.datasetA, alpha=1)
     profile = ProfileHMM(msa)
 
     print(f"Symbols: {len(msa[0])}")
     print(f"Matches: {profile.match_column_count}\n{'-' * 40}")
 
-    print("\nEmission Probability Distributions per Match")
+    print("\nEmission Probability Distributions per MATCH")
     for i, emission in enumerate(profile.match_emit_probs):
         print(f"{i + 1}: {emission.display()}")
+
+    print("\nINSERT Emission Probability Distribution")
+    print(profile.insert_emit_probs.display())
 
     seq = datasets.datasetC[2]
     seq2 = seq[:15] + "A" + seq[15:]
@@ -358,3 +359,17 @@ if __name__ == "__main__":
 
     v(seq)
     v(seq2)
+
+    print("\nTraining")
+    profile.train(datasets.datasetB)
+
+    print("\nTransition Probabilities:")
+    for state, probs in profile.transition_probs._probs.items():
+        print(f"\t{state}: {probs.display()}")
+
+    print("\nMATCH emission probabilities:")
+    for i, probs in enumerate(profile.match_emit_probs):
+        print(f"\t{i + 1}: {probs.display()}")
+
+    print("\nglobal INSERT emission probabilities:")
+    print(f"\t{profile.insert_emit_probs.display()}")
