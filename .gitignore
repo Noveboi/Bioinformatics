@@ -221,3 +221,4 @@ __marimo__/
 
 # SYSTEM-SPECIFIC STUFF
 _cache/
+.~lock*.odt#
