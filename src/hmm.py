@@ -80,9 +80,11 @@ class DynamicProgramSolver:
         INSERT: [
             (MATCH, 0, -1),
             (INSERT, 0, -1),
+            (DELETE, 0, -1),
         ],
         DELETE: [
             (MATCH, -1, 0),
+            (INSERT, -1, 0),
             (DELETE, -1, 0),
         ],
     }
@@ -472,6 +474,8 @@ class ProfileHMM:
 
                 prev_profile_col = node.profile_column
                 prev_state = curr_state
+
+            transition_counts[prev_profile_col][prev_state][END] += 1
 
         self.transition_probs = TransitionProbabilities.from_counts(transition_counts)
         self.match_emit_probs = [
