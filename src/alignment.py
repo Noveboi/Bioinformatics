@@ -117,8 +117,7 @@ def align(seq1: str, seq2: str, alpha: int, no_store: bool = True) -> AlignmentR
     moves: list[Move] = []
     aligned1: list[str] = []
     aligned2: list[str] = []
-    i = m
-    j = n
+    i, j = m, n
 
     # Alignment Process
     while i > 0 or j > 0:

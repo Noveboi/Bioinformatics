@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import argparse
+import dataclasses
 import logging
 import statistics
 from pathlib import Path
@@ -90,12 +91,29 @@ def run_profiling(args) -> None:
     profile = ProfileHMM(msa)
 
     log.info(
-        "Profile matched %d out of %d columns", profile.match_column_count, len(msa[0])
+        "Profile matched %d out of %d columns",
+        profile.profile_column_count,
+        len(msa[0]),
     )
 
     log.info("Training HMM profile on %d sequences", len(dataset))
 
+    def maybe_store_paths(path_name: str):
+        if args.store_paths:
+            paths = {}
+            for seq in dataset:
+                score, path = profile.viterbi(seq)
+                paths[seq] = {
+                    "score": score,
+                    "path": [dataclasses.asdict(path) for path in path],
+                }
+
+            cache.save_json(path_name, paths)
+
+    maybe_store_paths("viterbi_path")
     profile.train(dataset)
+    maybe_store_paths("viterbi_path_trained")
+
     cache.save_pickle("profile", profile)
 
 
@@ -229,6 +247,14 @@ def main():
         dest="id",
         help="The student ID to be used in determine the α parameter (used in the global alignment penalties)",
         required=True,
+    )
+
+    hmm_parser.add_argument(
+        "--save-paths",
+        action=argparse.BooleanOptionalAction,
+        dest="store_paths",
+        default=False,
+        help="Whether to store the Viterbi best paths on disk.",
     )
 
     synthesis_parser.set_defaults(func=run_synthesis)
