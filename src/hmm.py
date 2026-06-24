@@ -45,34 +45,6 @@ class TransitionProbabilities:
         self._probs = probabilities
 
     @classmethod
-    def uniform(cls, profile_column_count: int) -> "TransitionProbabilities":
-        probs = [
-            {
-                BEGIN: ProbabilityDistribution.uniform([INSERT, MATCH, DELETE]),
-                INSERT: ProbabilityDistribution.uniform([INSERT, MATCH]),
-            }
-        ]
-
-        for _ in range(1, profile_column_count):
-            probs.append(
-                {
-                    MATCH: ProbabilityDistribution.uniform([MATCH, INSERT, DELETE]),
-                    INSERT: ProbabilityDistribution.uniform([INSERT, MATCH]),
-                    DELETE: ProbabilityDistribution.uniform([DELETE, MATCH]),
-                }
-            )
-
-        probs.append(
-            {
-                MATCH: ProbabilityDistribution.uniform([INSERT, END]),
-                INSERT: ProbabilityDistribution.uniform([INSERT, END]),
-                DELETE: ProbabilityDistribution.uniform([END]),
-            }
-        )
-
-        return cls(probs)
-
-    @classmethod
     def from_counts(
         cls,
         counts_per_profile_column: list[dict[State, dict[State, int]]],
@@ -329,10 +301,6 @@ def _transition_counts_from_msa(
 ) -> list[dict[State, dict[State, int]]]:
     """
     Convert every aligned MSA row into a profile-HMM state path and count transitions.
-
-    Match columns generate either M_i or D_i, depending on whether the row has a
-    residue or a gap at that column. Non-match columns generate I_i only when the row
-    has a residue there; gaps in insertion columns do not correspond to an HMM state.
     """
     L = len(match_columns)
     match_columns_set = set(match_columns)
