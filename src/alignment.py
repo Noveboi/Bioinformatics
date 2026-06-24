@@ -191,7 +191,8 @@ def _best_alignment_pair(distances: DistanceMatrix) -> tuple[int, int, Alignment
     for i in range(distances.n):
         for j in range(i + 1, distances.n):
             alignment = distances.get(i, j)
-            score = alignment.score
+            score = alignment.score / len(alignment.aligned_seq1)
+
             if score > best_score:
                 best_score = score
                 best = (i, j, alignment)
@@ -297,10 +298,12 @@ def multiple_align(sequences: list[str], alpha: int) -> list[str]:
     remaining = set(range(len(sequences))) - {i, j}
 
     while len(remaining) > 0:
-        included = set(msa.keys())
-        msa_sequences = [msa[k] for k in list(msa.keys())]
+        included_order = list(msa.keys())
+        included_set = set(included_order)
 
-        next_idx = _pick_next_index(remaining, included, distances)
+        msa_sequences = [msa[k] for k in included_order]
+
+        next_idx = _pick_next_index(remaining, included_set, distances)
 
         consensus = _build_consensus(msa_sequences)
         next_best_sequence = sequences[next_idx]
@@ -312,7 +315,7 @@ def multiple_align(sequences: list[str], alpha: int) -> list[str]:
 
         updated = _add_gaps(msa_sequences, aligned_consensus)
 
-        msa = dict(zip(included, updated))
+        msa = dict(zip(included_order, updated))
         msa[next_idx] = aligned_next_best_sequence
 
         remaining.remove(next_idx)

@@ -179,7 +179,13 @@ class DynamicProgramSolver:
                         continue
 
                     best_score, best_state, p = self._combine(candidates)
-                    score = best_score + self._probs(state, i - 1, observations[j - 1])
+
+                    if state == DELETE:
+                        emission_score = 0.0
+                    else:
+                        emission_score = self._probs(state, i - 1, observations[j - 1])
+
+                    score = best_score + emission_score
 
                     if score > dp[i][j][idx]:
                         dp[i][j][idx] = score
@@ -328,8 +334,6 @@ def _transition_counts_from_msa(
             counts[prev_profile_col][prev_state][curr_state] += 1
             prev_state = curr_state
             prev_profile_col = curr_profile_col
-
-        counts[prev_profile_col][prev_state][END] += 1
 
     return counts
 
