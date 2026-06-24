@@ -1,6 +1,8 @@
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, TypeAlias
 
 from common import (
     ALPHABET,
@@ -10,13 +12,13 @@ from common import (
 )
 
 
-class State(Enum):
-    NONE = -1
-    BEGIN = 0
-    MATCH = 1
-    INSERT = 2
-    DELETE = 3
-    END = 4
+class State(str, Enum):
+    NONE = "NONE"
+    BEGIN = "BEGIN"
+    MATCH = "MATCH"
+    INSERT = "INSERT"
+    DELETE = "DELETE"
+    END = "END"
 
 
 # shorthand syntax for more compact code
@@ -29,7 +31,7 @@ END = State.END
 
 
 @dataclass(frozen=True)
-class ViterbiNode:
+class PathNode:
     state: State
     profile_column: int
     sequence_position: int
@@ -86,13 +88,182 @@ class TransitionProbabilities:
         return self._probs[profile_column][current_state].log(next_state)
 
 
+_DPCandidate: TypeAlias = tuple[float, State, int]
+
+
+class DynamicProgramSolver:
+    _STATE_IDX = {
+        MATCH: 0,
+        INSERT: 1,
+        DELETE: 2,
+    }  # perf optimization
+
+    # state -> (previous_state, Δ(profile_column), Δ(sequence_position))
+    _PREDECESSORS = {
+        MATCH: [
+            (MATCH, -1, -1),
+            (INSERT, -1, -1),
+            (DELETE, -1, -1),
+        ],
+        INSERT: [
+            (MATCH, 0, -1),
+            (INSERT, 0, -1),
+        ],
+        DELETE: [
+            (MATCH, -1, 0),
+            (DELETE, -1, 0),
+        ],
+    }
+
+    _STATES = [MATCH, INSERT, DELETE]
+
+    def __init__(
+        self,
+        profile_column_count: int,
+        combine: Callable[[Sequence[_DPCandidate]], _DPCandidate],
+        match_emission_probs: list[ProbabilityDistribution[str]],
+        insert_emission_probs: ProbabilityDistribution[str],
+        transition_probabilities: TransitionProbabilities,
+    ) -> None:
+        self._profile_column_count = profile_column_count
+        self._combine = combine
+        self._transition_probs = transition_probabilities
+
+        def prob(state: State, profile_column: int, symbol: str) -> float:
+            match state:
+                case State.MATCH:
+                    return match_emission_probs[profile_column].log(symbol)
+                case State.INSERT:
+                    return insert_emission_probs.log(symbol)
+                case _:
+                    return 0
+
+        self._probs = prob
+
+    def solve(
+        self,
+        observations: str,
+        trace_path: bool = True,
+    ) -> tuple[float, Sequence[PathNode]]:
+        L, n = self._profile_column_count, len(observations)
+        tp = self._transition_probs.log
+
+        dp = [[[NEGATIVE_INFINITY] * 3 for _ in range(n + 1)] for _ in range(L + 1)]
+        trace = (
+            [[[(State.NONE, -1)] * 3 for _ in range(n + 1)] for _ in range(L + 1)]
+            if trace_path
+            else None
+        )
+
+        for i in range(L + 1):
+            for j in range(n + 1):
+                for state in self._STATES:
+                    # Structural validity of profile-HMM states.
+                    if state == MATCH and (i == 0 or j == 0):
+                        continue
+
+                    if state == INSERT and j == 0:
+                        continue
+
+                    if state == DELETE and i == 0:
+                        continue
+
+                    idx = self._STATE_IDX[state]
+                    candidates: list[_DPCandidate] = []
+                    begin_added = False
+
+                    # use only the valid incoming edges
+                    for prev_state, di, dj in self._PREDECESSORS[state]:
+                        # p = previous profile column
+                        # s = previous sequence position
+                        p, s = i + di, j + dj
+
+                        if p < 0 or s < 0:
+                            continue
+
+                        if p == 0 and s == 0:
+                            if not begin_added:
+                                candidates.append((tp(0, BEGIN, state), BEGIN, 0))
+                                begin_added = True
+                            continue
+
+                        prev_idx = self._STATE_IDX[prev_state]
+                        score = dp[p][s][prev_idx]
+
+                        if score <= NEGATIVE_INFINITY:
+                            continue
+
+                        candidates.append(
+                            (
+                                score + tp(p, prev_state, state),
+                                prev_state,
+                                p,
+                            )
+                        )
+
+                    if len(candidates) == 0:
+                        continue
+
+                    best_score, best_state, p = self._combine(candidates)
+                    score = best_score + self._probs(state, i - 1, observations[j - 1])
+
+                    if score > dp[i][j][idx]:
+                        dp[i][j][idx] = score
+
+                        if trace is not None:
+                            trace[i][j][idx] = best_state, p
+
+        final_candidates: list[_DPCandidate] = [
+            (dp[L][n][self._STATE_IDX[MATCH]] + tp(L, MATCH, END), MATCH, L),
+            (dp[L][n][self._STATE_IDX[INSERT]] + tp(L, INSERT, END), INSERT, L),
+            (dp[L][n][self._STATE_IDX[DELETE]] + tp(L, DELETE, END), DELETE, L),
+        ]
+
+        best_final_score, current_state, _ = self._combine(final_candidates)
+
+        if trace is None:
+            return best_final_score, []
+
+        p, s = L, n
+
+        path: list[PathNode] = [PathNode(END, L + 1, s)]
+
+        while current_state != BEGIN:
+            path.append(
+                PathNode(
+                    current_state,
+                    profile_column=p,
+                    sequence_position=s,
+                )
+            )
+
+            idx = self._STATE_IDX[current_state]
+
+            if current_state == MATCH:
+                t = trace[p][s][idx]
+                s -= 1
+            elif current_state == INSERT:
+                t = trace[p][s][idx]
+                s -= 1
+            elif current_state == DELETE:
+                t = trace[p][s][idx]
+            else:
+                raise RuntimeError()
+
+            current_state, p = t
+
+        path.reverse()
+
+        return best_final_score, path
+
+
 def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
     """
     Returns the indices of 'match' columns in the MSA.
 
     A column is a 'match' column if the fraction of gap symbols is
     below the given ``threshold``. That means a lower ``threshold`` allows more
-    'match' columns to be identified, a higher ``threshold`` is stricter.
+    'match' columns to be identified, a lower ``threshold`` is stricter.
     """
     n_cols = len(msa[0])
     n_rows = len(msa)
@@ -104,13 +275,12 @@ def _get_match_columns(msa: list[str], threshold: float) -> list[int]:
     ]
 
 
-def _logsumexp(values: list[float]) -> float:
-    values = [v for v in values if v > NEGATIVE_INFINITY]
-    if not values:
-        return NEGATIVE_INFINITY
+def _logsumexp(candidates: Sequence[_DPCandidate]) -> _DPCandidate:
+    candidates = [v for v in candidates if v[0] > NEGATIVE_INFINITY]
 
-    m = max(values)
-    return m + math.log(sum(math.exp(v - m) for v in values))
+    m = max(candidates, key=lambda x: x[0])
+
+    return m[0] + math.log(sum(math.exp(v[0] - m[0]) for v in candidates)), m[1], m[2]
 
 
 class ProfileHMM:
@@ -149,10 +319,17 @@ class ProfileHMM:
                 f"No match columns detected from MSA. (threshold={THRESHOLD}"
             )
 
-        match_counts: list[dict[str, int]] = [
-            {c: 0 for c in ALPHABET} for _ in range(L)
-        ]
-        insert_counts: dict[str, int] = {x: 0 for x in ALPHABET}
+        if len(set(len(s) for s in msa)) > 1:
+            raise ValueError("All MSA sequences are expected to be of equal length.")
+
+        valid_symbols = set(ALPHABET).union("-")
+        if len(set(chr for s in msa for chr in s) - valid_symbols):
+            raise ValueError(
+                f"Expected all MSA sequences to only contain symbols: {valid_symbols}"
+            )
+
+        match_counts = [{x: 0 for x in ALPHABET} for _ in range(L)]
+        insert_counts = {x: 0 for x in ALPHABET}
 
         for sequence in msa:
             for j, col in enumerate(match_columns):
@@ -167,7 +344,7 @@ class ProfileHMM:
                 if col not in match_columns_set and symbol != GAP:
                     insert_counts[symbol] += 1
 
-        self.match_column_count = L
+        self.profile_column_count = L
         self.transition_probs = TransitionProbabilities.uniform(L)
 
         self.match_emit_probs = [
@@ -177,147 +354,41 @@ class ProfileHMM:
             insert_counts, True
         )
 
-    def viterbi(self, sequence: str) -> tuple[float, list[ViterbiNode]]:
+    def viterbi(self, sequence: str) -> tuple[float, Sequence[PathNode]]:
         """
         Finds the most likely state path for a sequence
         """
-        L, n = self.match_column_count, len(sequence)
-        tp = self.transition_probs.log
+        solver = DynamicProgramSolver(
+            profile_column_count=self.profile_column_count,
+            combine=lambda x: max(x, key=lambda y: y[0]),
+            transition_probabilities=self.transition_probs,
+            match_emission_probs=self.match_emit_probs,
+            insert_emission_probs=self.insert_emit_probs,
+        )
 
-        # Dynamic programming matrcies
-        # 1. dp_m[i][j] : best score ending in MATCH at profile column i after emitting j symbols
-        # 2. dp_i[i][j] : best score ending in INSERT at profile column i after emitting j symbols
-        # 3. dp_d[i][j] : best score ending in DELETE at profile column i after emmitting j symbols
-        dp_m = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
-        dp_i = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
-        dp_d = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
+        return solver.solve(sequence, trace_path=True)
 
-        # Traceback matrices -- these will define the best path
-        trace_m = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
-        trace_i = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
-        trace_d = [[(State.NONE, -1)] * (n + 1) for _ in range(L + 1)]
+    # The forward algorithm has very similar DP structure to Viterbi.
+    def forward(self, sequence: str) -> float:
+        """
+        Any-path score for a sequence under the profile HMM.
+        Returns log P(sequence | HMM).
+        """
+        solver = DynamicProgramSolver(
+            profile_column_count=self.profile_column_count,
+            combine=_logsumexp,
+            match_emission_probs=self.match_emit_probs,
+            insert_emission_probs=self.insert_emit_probs,
+            transition_probabilities=self.transition_probs,
+        )
 
-        # Main DP loop
-        for i in range(L + 1):
-            for j in range(n + 1):
-                # INSERT[i][j] -- emits sequence[j-1], stays at the same profile column
-                if j > 0:
-                    candidates: list[tuple[float, State]] = []
-                    p, s = i, j - 1
-
-                    if p == 0 and s == 0:  # INSERT Initial Condition
-                        candidates.append((tp(p, BEGIN, INSERT), BEGIN))
-
-                    if dp_m[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[p][s] + tp(p, MATCH, INSERT), MATCH))
-                    if dp_i[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_i[p][s] + tp(p, INSERT, INSERT), INSERT))
-
-                    if len(candidates) > 0:
-                        score, prev_state = max(candidates, key=lambda x: x[0])
-                        best_emission_score = score + self.insert_emit_probs.log(
-                            sequence[s]
-                        )
-
-                        if best_emission_score > dp_i[i][j]:
-                            dp_i[i][j] = best_emission_score
-                            trace_i[i][j] = (prev_state, p)
-
-                # MATCH[i][j] -- emits sequence[j-1], advances the profile column and sequence position
-                if i > 0 and j > 0:
-                    candidates: list[tuple[float, State]] = []
-                    p, s = i - 1, j - 1
-
-                    if p == 0 and s == 0:  # MATCH Initial Condition
-                        candidates.append((tp(p, BEGIN, MATCH), BEGIN))
-
-                    if dp_m[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[p][s] + tp(p, MATCH, MATCH), MATCH))
-                    if dp_i[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_i[p][s] + tp(p, INSERT, MATCH), INSERT))
-                    if dp_d[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_d[p][s] + tp(p, DELETE, MATCH), DELETE))
-
-                    if len(candidates) > 0:
-                        score, prev_state = max(candidates, key=lambda x: x[0])
-                        best_emission_score = score + self.match_emit_probs[p].log(
-                            sequence[s]
-                        )
-
-                        if best_emission_score > dp_m[i][j]:
-                            dp_m[i][j] = best_emission_score
-                            trace_m[i][j] = (prev_state, p)
-
-                # DELETE[i, j] -- does not emit, does not advance profile column
-                if i > 0:
-                    candidates: list[tuple[float, State]] = []
-                    p, s = i - 1, j
-
-                    if p == 0 and s == 0:  # DELETE Initial Condition
-                        candidates.append((tp(p, BEGIN, DELETE), BEGIN))
-
-                    if dp_m[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_m[p][s] + tp(p, MATCH, DELETE), MATCH))
-                    if dp_d[p][s] > NEGATIVE_INFINITY:
-                        candidates.append((dp_d[p][s] + tp(p, DELETE, DELETE), DELETE))
-
-                    if len(candidates) > 0:
-                        score, prev_state = max(candidates, key=lambda x: x[0])
-
-                        if score > dp_d[i][j]:
-                            dp_d[i][j] = score
-                            trace_d[i][j] = (prev_state, p)
-
-        # Determine the best final state after processing all `n` symbols
-        final_candidates: list[tuple[float, State]] = []
-
-        if dp_m[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_m[L][n] + tp(L, MATCH, END), MATCH))
-        if dp_i[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_i[L][n] + tp(L, INSERT, END), INSERT))
-        if dp_d[L][n] > NEGATIVE_INFINITY:
-            final_candidates.append((dp_d[L][n] + tp(L, DELETE, END), DELETE))
-
-        if len(final_candidates) == 0:
-            return NEGATIVE_INFINITY, []
-
-        score, node_type = max(final_candidates, key=lambda x: x[0])
-        i, j = L, n
-
-        # Construct the path from end to beginning
-        path: list[ViterbiNode] = [
-            ViterbiNode(
-                END,
-                profile_column=L,
-                sequence_position=n,
-            )
-        ]
-
-        while node_type != BEGIN:
-            path.append(ViterbiNode(node_type, profile_column=i, sequence_position=j))
-
-            if node_type == MATCH:
-                trace = trace_m[i][j]
-                j -= 1
-            elif node_type == INSERT:
-                trace = trace_i[i][j]
-                j -= 1
-            elif node_type == DELETE:
-                trace = trace_d[i][j]
-                # j unchanged
-            else:
-                raise RuntimeError(f"Unexpected trackback node: {node_type.name}")
-
-            node_type, i = trace
-
-        path.reverse()
-        return score, path
+        return solver.solve(sequence, trace_path=False)[0]
 
     def train(self, sequences: list[str]) -> None:
         """
-        Train the profile HMM using the best-path method.
+        Train the profile HMM using the best-path (Viterbi) method.
         """
-        L = self.match_column_count
+        L = self.profile_column_count
 
         transition_counts = [
             {
@@ -363,83 +434,4 @@ class ProfileHMM:
         ]
         self.insert_emit_probs = ProbabilityDistribution.from_counts(
             insert_counts, True
-        )
-
-    # The forward algorithm has very similar DP structure to Viterbi.
-    def forward(self, sequence: str) -> float:
-        """
-        Any-path score for a sequence under the profile HMM.
-        Returns log P(sequence | HMM).
-        """
-        L, n = self.match_column_count, len(sequence)
-        tp = self.transition_probs.log
-
-        # Forward DP tables in log-space
-        f_m = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
-        f_i = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
-        f_d = [[NEGATIVE_INFINITY] * (n + 1) for _ in range(L + 1)]
-
-        for i in range(L + 1):
-            for j in range(n + 1):
-                # INSERT[i][j]: emits sequence[j-1], stays at same profile column
-                if j > 0:
-                    prev_scores: list[float] = []
-                    p, s = i, j - 1
-
-                    if p == 0 and s == 0:
-                        prev_scores.append(tp(p, BEGIN, INSERT))
-
-                    if f_m[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_m[p][s] + tp(p, MATCH, INSERT))
-                    if f_i[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_i[p][s] + tp(p, INSERT, INSERT))
-
-                    if prev_scores:
-                        f_i[i][j] = _logsumexp(
-                            prev_scores
-                        ) + self.insert_emit_probs.log(sequence[s])
-
-                # MATCH[i][j]: emits sequence[j-1], advances profile column
-                if i > 0 and j > 0:
-                    prev_scores = []
-                    p, s = i - 1, j - 1
-
-                    if p == 0 and s == 0:
-                        prev_scores.append(tp(p, BEGIN, MATCH))
-
-                    if f_m[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_m[p][s] + tp(p, MATCH, MATCH))
-                    if f_i[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_i[p][s] + tp(p, INSERT, MATCH))
-                    if f_d[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_d[p][s] + tp(p, DELETE, MATCH))
-
-                    if prev_scores:
-                        f_m[i][j] = _logsumexp(prev_scores) + self.match_emit_probs[
-                            p
-                        ].log(sequence[s])
-
-                # DELETE[i][j]: emits nothing, advances profile column
-                if i > 0:
-                    prev_scores = []
-                    p, s = i - 1, j
-
-                    if p == 0 and s == 0:
-                        prev_scores.append(tp(p, BEGIN, DELETE))
-
-                    if f_m[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_m[p][s] + tp(p, MATCH, DELETE))
-                    if f_d[p][s] > NEGATIVE_INFINITY:
-                        prev_scores.append(f_d[p][s] + tp(p, DELETE, DELETE))
-
-                    if prev_scores:
-                        f_d[i][j] = _logsumexp(prev_scores)
-
-        # Any-path score = sum over all valid ending states
-        return _logsumexp(
-            [
-                f_m[L][n] + tp(L, MATCH, END),
-                f_i[L][n] + tp(L, INSERT, END),
-                f_d[L][n] + tp(L, DELETE, END),
-            ]
         )
