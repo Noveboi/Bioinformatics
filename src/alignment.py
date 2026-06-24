@@ -302,12 +302,19 @@ def multiple_align(sequences: list[str], alpha: int) -> list[str]:
         msa_sequences = [msa[k] for k in list(msa.keys())]
 
         next_idx = _pick_next_index(remaining, included, distances)
+
         consensus = _build_consensus(msa_sequences)
-        result = align(consensus, sequences[next_idx], alpha=alpha)
-        updated = _add_gaps(msa_sequences, result.aligned_seq1)
+        next_best_sequence = sequences[next_idx]
+
+        result = align(consensus, next_best_sequence, alpha=alpha)
+
+        aligned_consensus = result.aligned_seq1
+        aligned_next_best_sequence = result.aligned_seq2
+
+        updated = _add_gaps(msa_sequences, aligned_consensus)
 
         msa = dict(zip(included, updated))
-        msa[next_idx] = result.aligned_seq2
+        msa[next_idx] = aligned_next_best_sequence
 
         remaining.remove(next_idx)
 
