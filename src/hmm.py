@@ -283,6 +283,87 @@ def _logsumexp(candidates: Sequence[_DPCandidate]) -> _DPCandidate:
     return m[0] + math.log(sum(math.exp(v[0] - m[0]) for v in candidates)), m[1], m[2]
 
 
+def _empty_transition_counts(
+    profile_column_count: int,
+) -> list[dict[State, dict[State, int]]]:
+    """
+    Return zero-filled transition-count dictionaries for the same topology used by the
+    dynamic program.
+
+    The list index is the source profile column. For example, index 0 contains
+    BEGIN and I_0 transitions, index i contains transitions leaving M_i, I_i and D_i,
+    and index L contains transitions into END.
+    """
+    L = profile_column_count
+
+    counts: list[dict[State, dict[State, int]]] = [
+        {
+            BEGIN: {INSERT: 0, MATCH: 0, DELETE: 0},
+            INSERT: {INSERT: 0, MATCH: 0, DELETE: 0},
+        }
+    ]
+
+    for _ in range(1, L):
+        counts.append(
+            {
+                MATCH: {MATCH: 0, INSERT: 0, DELETE: 0},
+                INSERT: {INSERT: 0, MATCH: 0, DELETE: 0},
+                DELETE: {DELETE: 0, MATCH: 0, INSERT: 0},
+            }
+        )
+
+    counts.append(
+        {
+            MATCH: {INSERT: 0, END: 0},
+            INSERT: {INSERT: 0, END: 0},
+            DELETE: {INSERT: 0, END: 0},
+        }
+    )
+
+    return counts
+
+
+def _transition_counts_from_msa(
+    msa: list[str],
+    match_columns: list[int],
+) -> list[dict[State, dict[State, int]]]:
+    """
+    Convert every aligned MSA row into a profile-HMM state path and count transitions.
+
+    Match columns generate either M_i or D_i, depending on whether the row has a
+    residue or a gap at that column. Non-match columns generate I_i only when the row
+    has a residue there; gaps in insertion columns do not correspond to an HMM state.
+    """
+    L = len(match_columns)
+    match_columns_set = set(match_columns)
+    counts = _empty_transition_counts(L)
+
+    for sequence in msa:
+        prev_state = BEGIN
+        prev_profile_col = 0
+        profile_col = 0
+
+        for msa_col, symbol in enumerate(sequence):
+            if msa_col in match_columns_set:
+                profile_col += 1
+                curr_state = DELETE if symbol == GAP else MATCH
+                curr_profile_col = profile_col
+            else:
+                if symbol == GAP:
+                    continue
+
+                curr_state = INSERT
+                curr_profile_col = profile_col
+
+            counts[prev_profile_col][prev_state][curr_state] += 1
+            prev_state = curr_state
+            prev_profile_col = curr_profile_col
+
+        counts[prev_profile_col][prev_state][END] += 1
+
+    return counts
+
+
 class ProfileHMM:
     """
     A profile hidden Markov model consisting of:
@@ -345,7 +426,9 @@ class ProfileHMM:
                     insert_counts[symbol] += 1
 
         self.profile_column_count = L
-        self.transition_probs = TransitionProbabilities.uniform(L)
+        self.transition_probs = TransitionProbabilities.from_counts(
+            _transition_counts_from_msa(msa, match_columns)
+        )
 
         self.match_emit_probs = [
             ProbabilityDistribution.from_counts(c, True) for c in match_counts
@@ -390,13 +473,7 @@ class ProfileHMM:
         """
         L = self.profile_column_count
 
-        transition_counts = [
-            {
-                s1: {s2: 0 for s2 in [MATCH, INSERT, DELETE, END]}
-                for s1 in [BEGIN, MATCH, INSERT, DELETE]
-            }
-            for _ in range(L + 1)
-        ]
+        transition_counts = _empty_transition_counts(L)
 
         match_counts = [{x: 0 for x in ALPHABET} for _ in range(L)]
 
